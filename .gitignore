@@ -1,0 +1,5 @@
+*.exe
+*.obj
+*.o
+/wkFastDraw.dll
+/tests/fastdraw-check.dll
