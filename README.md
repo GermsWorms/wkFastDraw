@@ -47,7 +47,7 @@ where, in what order, and how the picture gets to the screen.
 
 **How it gets in.** When WA loads the module, it checks that this is WA 3.8.1 and that the routine is exactly as WA has it, then
 writes two 5-byte jumps over the start of the two loops. They lead into the module and back to WA right after the loops. If
-anything is not as expected, it changes nothing. Files on disk are never touched.
+anything is not as expected, it changes nothing. None of WA's files are changed.
 
 ## What it doesn't change
 
