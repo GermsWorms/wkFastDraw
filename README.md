@@ -2,15 +2,11 @@
 
 Makes **Worms Armageddon 3.8.1** draw its map about two to three times faster. The picture stays the same.
 
-WA draws everything on the CPU, on one thread. Most of that time goes into one small routine that copies the land, the sky
-and the background onto the screen one pixel at a time. wkFastDraw does that copy 16 pixels at a time (SSE2) and changes
-nothing else: no game rules, no files, no settings, no graphics card code.
-
 It is a WormKit module: one file, `wkFastDraw.dll`, with nothing to set up.
 
 ## How much faster
 
-Frames a second on one desktop PC (Zen 2 CPU), replays in a window, Direct3D 9 (shader), vsync off:
+Frames a second on one desktop PC, 3.8.1 with the Direct3D 9 (shader) renderer, vsync off:
 
 | | WA 3.8.1 | with wkFastDraw |
 |---|---|---|
@@ -20,15 +16,47 @@ Frames a second on one desktop PC (Zen 2 CPU), replays in a window, Direct3D 9 (
 | 2560x1440, full detail | 330 | 820 |
 | 3840x2160, full detail | 210 | 400 |
 
-Results vary by about 20% from run to run, and other PCs will differ. With vsync on, the frame rate stays your monitor's
-and WA uses less CPU instead: at 120 Hz and 1080p full detail its main thread went from 33% to 17% of one core.
+Your numbers will differ with your PC, your detail level and the map. With vsync on, the frame rate stays your monitor's and
+WA uses less of your CPU instead: at 120 Hz and full detail, WA's main thread went from 33% to 17% of one core.
 
-Where it doesn't help:
+## How it works
 
-- A map zoomed by [wkMapZoom](https://github.com/GermsWorms/wkMapZoom) or wkVista: those modules draw the zoomed map
-  themselves. Both run fine with wkFastDraw.
-- Pauses that aren't drawing: many crates landing on a large map, for example, is the game's own work.
-- WA's old 8-bit DirectDraw renderer with hardware rendering (Windows 7 and older), which doesn't use this routine.
+WA 3.8.1 is drawn by the CPU, not the graphics card. Every frame, one thread puts the whole picture together in memory, one
+byte a pixel (a number from 0 to 255: the colour's place in the palette). The graphics card only gets the finished picture
+and turns those numbers into colours.
+
+Most of that work is copying. The land is kept in tiles, the sky in strips 64 pixels wide, and the back layers in tiles too,
+and all of it is copied onto the picture again every frame, about two million pixels at 1080p. One small routine in WA does
+all of those copies, and it takes 45 to 75% of that thread's time:
+
+- **Pieces with see-through parts** (land, back layers) are copied one pixel at a time: read a pixel, is it the see-through
+  colour, if not write it, next pixel.
+- **Solid pieces** (the sky) are copied a row at a time with a function call for each row. The sky's strips are only 64 pixels
+  wide, so that is tens of thousands of calls a frame.
+
+wkFastDraw replaces those two loops with ones that use SSE2, processor instructions every PC of the last 20 years has, which
+handle 16 pixels at once:
+
+1. Load 16 pixels of the piece.
+2. Compare all 16 with the see-through colour in one step. That gives a mask of which to skip.
+3. Skip all 16 (an empty part), write all 16 (a solid part), or mix them with what is there already (an edge).
+4. Solid rows are simply written 16 pixels at a time, with no call per row.
+
+The result is the same bytes in the same places, only sooner. Everything else is still WA's own code: which pieces are drawn,
+where, in what order, and how the picture gets to the screen.
+
+**How it gets in.** When WA loads the module, it checks that this is WA 3.8.1 and that the routine is exactly as WA has it, then
+writes two 5-byte jumps over the start of the two loops. They lead into the module and back to WA right after the loops. If
+anything is not as expected, it changes nothing. Files on disk are never touched.
+
+## What it doesn't change
+
+- **The game.** Only the picture is drawn faster. Physics, random numbers, turns and what is sent to other players are WA's own,
+  so nobody else needs the module.
+- **A map drawn by another module.** Zoomed with [wkMapZoom](https://github.com/GermsWorms/wkMapZoom) or wkVista, the map is drawn
+  by that module, so wkFastDraw has nothing to speed up. At 100% zoom wkMapZoom lets WA draw (4.3 beta 2 also with its
+  speedometer on), and then it helps.
+- **Pauses that aren't drawing.** Many crates landing on a large map, for example, is the game's own work.
 
 ## Install
 
@@ -37,46 +65,34 @@ Where it doesn't help:
 
 To remove it, delete the file while WA is closed. `install.ps1` (and `install.ps1 -Remove`) does the same.
 
-It works with Steam's and GOG's 3.8.1. On anything else it does nothing. What it did is in
-`%LOCALAPPDATA%\wkFastDraw\wkFastDraw.log`.
-
-## Online games and replays
-
-Only your own picture is drawn faster. The game's rules, its random numbers and what is sent to other players are not
-touched, so online games and replays should stay in step and nobody else needs the module. (It has been tested on
-replays, not yet in a live online game.) As with every WormKit module, WA notes a scrambled checksum of the file in
-replays and sends it to the other players; WA does nothing with it.
-
-## How it was checked
-
-- **Against WA's own code.** The tests run WA's two loops (taken from your `WA.exe` when the tests run) and the module's
-  on the same 60,000 made-up pictures and compare every byte, the stack and WA's variables.
-- **In the game.** A check build did every 16th copy with plain loops too: 1.1 million copies in two matches, none
-  different.
-- **Whole pictures.** 968 frames saved with WA's Export Video (eight stretches of seven replays, 640x480 to 3840x2160),
-  with and without the module: the map and everything in play are the same. What differs is what WA moves by the real
-  clock, not the game's: the chat phone, the energy bars sliding in, and the drifting background stars.
-- **Independent review** of the machine code, the loops, the loading and WA's behaviour.
+It works with Steam's and GOG's 3.8.1. `%LOCALAPPDATA%\wkFastDraw\wkFastDraw.log` says whether it is on.
 
 ## Other modules
 
-Started together with wkFastDraw, each drawing a replay for about 20 seconds with no crash: wkMapZoom 4.3, WormForge
-0.9.9, wkVista 0.1.4, wkRGBA, wkZoom 0.2.0, wkJellyWorm (3.8.1 v1), wkRealTime 0.0.9.2, wkTerrainSync 1.2.6.1,
-wkTrackMeBetter 3.8.1, wkWall2Wall, wkPin 1.0.0.8, wkVolumeControl, wkSuperFrontend and wkRemapKeys, and nine of them all
-at once. Not tested: wkBindKeys and wkWormNAT2 (they need other files to start).
+| Works with | |
+|---|---|
+| Drawing and zoom | wkMapZoom 4.3 beta, wkVista 0.1.4, wkZoom 0.2.0, wkRGBA, wkJellyWorm (3.8.1 v1) |
+| Modding | WormForge 0.9.9 |
+| Game and maps | wkRealTime 0.0.9.2, wkTerrainSync 1.2.6.1, wkTrackMeBetter 3.8.1, wkWall2Wall, wkPin 1.0.0.8 |
+| Controls, sound, menus | wkRemapKeys, wkVolumeControl, wkSuperFrontend |
 
-If another module has changed the same routine, wkFastDraw leaves WA alone and says whose it is in the log.
+Not tried: RubberWorm, wkBindKeys, wkWormNAT2. If another module has changed the same routine, wkFastDraw leaves WA alone and the
+log says whose change it found.
 
 ## Good to know
 
-- With vsync **off** you get more frames a second. WA measures the mouse flick that takes over the camera per drawn
-  frame, so at very high frame rates that flick has to be quicker. Holding the left mouse button, Scroll Lock, WA's
+- With vsync **off** you get more frames a second. WA measures the mouse flick that takes over the camera per drawn frame, so
+  at very high frame rates that flick has to be quicker. Holding the left mouse button, Scroll Lock, WA's
   `CameraUnlockMouseSpeed` setting or vsync all get around it.
-- Untested so far: real weak laptops, fullscreen, Windows 7/8/10 and Wine.
+- As with every WormKit module, WA notes a scrambled checksum of the file in replays and sends it to the other players. WA does
+  nothing with it.
+- Not tried yet: live online games, exclusive fullscreen, weak laptops, Windows 7/8/10 and Wine. If something looks wrong, please
+  [open an issue](https://github.com/GermsWorms/wkFastDraw/issues) with the log.
 
 ## Build
 
-`build.ps1` needs 32-bit MinGW gcc. It runs the tests, then makes `wkFastDraw.dll`.
+`build.ps1` needs 32-bit MinGW gcc. It runs the tests (they compare the new loops with WA's own code from your `WA.exe`), then
+makes `wkFastDraw.dll`.
 
 ## License
 
